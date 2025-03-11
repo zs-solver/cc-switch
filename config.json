@@ -1,0 +1,44 @@
+{
+  "settings_dir": "~\\.claude",
+  "known_env_keys": [
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_MODEL"
+  ],
+  "configs": [
+    {
+      "name": "One API (AI In One)",
+      "filename": "settings-one-api.json",
+      "website": "https://ai-in.one",
+      "base_url": "https://ai-in.one"
+    },
+    {
+      "name": "Fucheers (New API)",
+      "filename": "settings-fucheers.json",
+      "website": "https://www.fucheers.top",
+      "base_url": "https://www.fucheers.top"
+    },
+    {
+      "name": "GLM5 (阿里云)",
+      "filename": "settings-glm5.json",
+      "website": "https://dashscope.aliyuncs.com",
+      "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/claude-code-proxy"
+    },
+    {
+      "name": "TimeSniper (一元)",
+      "filename": "settings-timesniper.json",
+      "website": "https://timesniper.club",
+      "base_url": "https://timesniper.club"
+    },
+    {
+      "name": "AI派 (AIPaiBox)",
+      "filename": "settings-aipaibox.json",
+      "website": "https://api.aipaibox.com",
+      "base_url": "https://api.aipaibox.com"
+    }
+  ]
+}
