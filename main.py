@@ -2,8 +2,8 @@ import sys
 import os
 import json
 import subprocess
-from PyQt5.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QAction,
-                             QActionGroup)
+import webbrowser
+from PyQt5.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QAction)
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
 from PyQt5.QtCore import Qt
 
@@ -22,7 +22,7 @@ def load_config():
 APP_CONFIG = load_config()
 SETTINGS_DIR = os.path.expanduser(APP_CONFIG["settings_dir"])
 SETTINGS_FILE = os.path.join(SETTINGS_DIR, "settings.json")
-CONFIGS = [(c["name"], c["filename"]) for c in APP_CONFIG["configs"]]
+CONFIGS = APP_CONFIG["configs"]
 KNOWN_ENV_KEYS = set(APP_CONFIG["known_env_keys"])
 
 
@@ -41,15 +41,15 @@ def detect_current(settings):
     """根据当前 settings.json 的 env 匹配到哪个配置"""
     cur_url = settings.get("env", {}).get("ANTHROPIC_BASE_URL", "")
     cur_token = settings.get("env", {}).get("ANTHROPIC_AUTH_TOKEN", "")
-    for name, filename in CONFIGS:
-        cfg_path = os.path.join(SETTINGS_DIR, filename)
+    for entry in CONFIGS:
+        cfg_path = os.path.join(SETTINGS_DIR, entry["filename"])
         if not os.path.exists(cfg_path):
             continue
         cfg = read_json(cfg_path)
         cfg_url = cfg.get("env", {}).get("ANTHROPIC_BASE_URL", "")
         cfg_token = cfg.get("env", {}).get("ANTHROPIC_AUTH_TOKEN", "")
         if cur_url == cfg_url and cur_token == cfg_token:
-            return name
+            return entry["name"]
     return None
 
 
@@ -106,6 +106,19 @@ class CCSwitch:
         self.build_menu()
         self.tray.show()
 
+    def create_check_icon(self):
+        """创建一个圆点图标用于标记当前配置"""
+        size = 16
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setBrush(QColor("#000000"))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(4, 4, 8, 8)
+        painter.end()
+        return QIcon(pixmap)
+
     def build_menu(self):
         """构建/重建托盘菜单"""
         settings = read_json(SETTINGS_FILE)
@@ -113,21 +126,48 @@ class CCSwitch:
 
         menu = QMenu()
 
-        # 配置切换区
-        group = QActionGroup(menu)
-        group.setExclusive(True)
-
-        for name, filename in CONFIGS:
+        # 配置切换区（子菜单）
+        for entry in CONFIGS:
+            name = entry["name"]
+            filename = entry["filename"]
+            website = entry.get("website", "")
             cfg_path = os.path.join(SETTINGS_DIR, filename)
             if not os.path.exists(cfg_path):
                 continue
-            action = QAction(name, menu, checkable=True)
-            action.setData(filename)
+
+            submenu = menu.addMenu(name)
             if name == self.current_name:
-                action.setChecked(True)
-            action.triggered.connect(lambda checked, fn=filename, n=name: self.on_switch(fn, n))
-            group.addAction(action)
-            menu.addAction(action)
+                submenu.setIcon(self.create_check_icon())
+
+            # 切换到此配置
+            switch_action = QAction("切换到此配置", submenu)
+            switch_action.triggered.connect(
+                lambda checked, fn=filename, n=name: self.on_switch(fn, n)
+            )
+            submenu.addAction(switch_action)
+
+            # 复制启动参数
+            settings_path = os.path.join(SETTINGS_DIR, filename)
+            copy_action = QAction("复制启动参数", submenu)
+            copy_action.triggered.connect(
+                lambda checked, p=settings_path: self.copy_settings_arg(p)
+            )
+            submenu.addAction(copy_action)
+
+            # 打开配置文件
+            open_action = QAction("打开配置文件", submenu)
+            open_action.triggered.connect(
+                lambda checked, p=cfg_path: os.startfile(p)
+            )
+            submenu.addAction(open_action)
+
+            # 访问官网
+            if website:
+                web_action = QAction("访问官网", submenu)
+                web_action.triggered.connect(
+                    lambda checked, url=website: webbrowser.open(url)
+                )
+                submenu.addAction(web_action)
 
         menu.addSeparator()
 
@@ -156,6 +196,13 @@ class CCSwitch:
                 # 在鼠标位置显示菜单
                 from PyQt5.QtGui import QCursor
                 menu.popup(QCursor.pos())
+
+    def copy_settings_arg(self, settings_path):
+        """复制 --settings <path> 到剪贴板"""
+        text = f"--settings {settings_path}"
+        QApplication.clipboard().setText(text)
+        self.tray.showMessage("CC Switch", f"已复制: {text}",
+                              QSystemTrayIcon.Information, 2000)
 
     def on_switch(self, filename, name):
         if name == self.current_name:
