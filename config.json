@@ -39,6 +39,17 @@
       "filename": "settings-aipaibox.json",
       "website": "https://api.aipaibox.com",
       "base_url": "https://api.aipaibox.com"
+    },
+    {
+      "name": "timicc",
+      "filename": "settings-timicc.json",
+      "website": "https://timicc.com/",
+      "base_url": "https://timicc.com/"
+    },
+    {
+      "name": "Kiro (本地代理)",
+      "filename": "settings-kiro.json",
+      "base_url": "http://localhost:8000"
     }
   ]
 }

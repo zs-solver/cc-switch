@@ -21,6 +21,7 @@ def load_config():
 
 APP_CONFIG = load_config()
 SETTINGS_DIR = os.path.expanduser(APP_CONFIG["settings_dir"])
+LOCAL_SETTINGS_DIR = os.path.join(SCRIPT_DIR, "settings")
 SETTINGS_FILE = os.path.join(SETTINGS_DIR, "settings.json")
 CONFIGS = APP_CONFIG["configs"]
 KNOWN_ENV_KEYS = set(APP_CONFIG["known_env_keys"])
@@ -37,13 +38,24 @@ def write_json(path, data):
         f.write("\n")
 
 
+def find_cfg_path(filename):
+    """查找配置文件路径，优先项目 settings/ 目录，其次家目录"""
+    local_path = os.path.join(LOCAL_SETTINGS_DIR, filename)
+    if os.path.exists(local_path):
+        return local_path
+    home_path = os.path.join(SETTINGS_DIR, filename)
+    if os.path.exists(home_path):
+        return home_path
+    return None
+
+
 def detect_current(settings):
     """根据当前 settings.json 的 env 匹配到哪个配置"""
     cur_url = settings.get("env", {}).get("ANTHROPIC_BASE_URL", "")
     cur_token = settings.get("env", {}).get("ANTHROPIC_AUTH_TOKEN", "")
     for entry in CONFIGS:
-        cfg_path = os.path.join(SETTINGS_DIR, entry["filename"])
-        if not os.path.exists(cfg_path):
+        cfg_path = find_cfg_path(entry["filename"])
+        if not cfg_path:
             continue
         cfg = read_json(cfg_path)
         cfg_url = cfg.get("env", {}).get("ANTHROPIC_BASE_URL", "")
@@ -55,7 +67,9 @@ def detect_current(settings):
 
 def switch_config(target_filename):
     """将目标配置文件的 env 和 model 覆盖到 settings.json，清除多余 env 变量"""
-    target_path = os.path.join(SETTINGS_DIR, target_filename)
+    target_path = find_cfg_path(target_filename)
+    if not target_path:
+        raise FileNotFoundError(f"找不到配置文件: {target_filename}")
     target = read_json(target_path)
     current = read_json(SETTINGS_FILE)
 
@@ -131,8 +145,8 @@ class CCSwitch:
             name = entry["name"]
             filename = entry["filename"]
             website = entry.get("website", "")
-            cfg_path = os.path.join(SETTINGS_DIR, filename)
-            if not os.path.exists(cfg_path):
+            cfg_path = find_cfg_path(filename)
+            if not cfg_path:
                 continue
 
             submenu = menu.addMenu(name)
@@ -147,14 +161,13 @@ class CCSwitch:
             submenu.addAction(switch_action)
 
             # 复制启动参数
-            settings_path = os.path.join(SETTINGS_DIR, filename)
             copy_action = QAction("复制启动参数", submenu)
             copy_action.triggered.connect(
-                lambda checked, p=settings_path: self.copy_settings_arg(p)
+                lambda checked, p=cfg_path: self.copy_settings_arg(p)
             )
             submenu.addAction(copy_action)
 
-            # 打开配置文件（悬浮预览内容）
+            # 打开配置文件（悬浮预览路径和内容）
             open_action = QAction("打开配置文件", submenu)
             open_action.triggered.connect(
                 lambda checked, p=cfg_path: os.startfile(p)
@@ -162,12 +175,11 @@ class CCSwitch:
             try:
                 cfg_content = read_json(cfg_path)
                 preview = json.dumps(cfg_content, indent=2, ensure_ascii=False)
-                # 限制预览长度，避免 tooltip 过大
                 if len(preview) > 1500:
                     preview = preview[:1500] + "\n..."
-                open_action.setToolTip(preview)
+                open_action.setToolTip(f"📁 {cfg_path}\n\n{preview}")
             except Exception:
-                open_action.setToolTip("(无法读取文件内容)")
+                open_action.setToolTip(f"📁 {cfg_path}\n\n(无法读取文件内容)")
             submenu.setToolTipsVisible(True)
             submenu.addAction(open_action)
 
