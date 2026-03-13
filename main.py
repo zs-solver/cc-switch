@@ -154,11 +154,21 @@ class CCSwitch:
             )
             submenu.addAction(copy_action)
 
-            # 打开配置文件
+            # 打开配置文件（悬浮预览内容）
             open_action = QAction("打开配置文件", submenu)
             open_action.triggered.connect(
                 lambda checked, p=cfg_path: os.startfile(p)
             )
+            try:
+                cfg_content = read_json(cfg_path)
+                preview = json.dumps(cfg_content, indent=2, ensure_ascii=False)
+                # 限制预览长度，避免 tooltip 过大
+                if len(preview) > 1500:
+                    preview = preview[:1500] + "\n..."
+                open_action.setToolTip(preview)
+            except Exception:
+                open_action.setToolTip("(无法读取文件内容)")
+            submenu.setToolTipsVisible(True)
             submenu.addAction(open_action)
 
             # 访问官网
