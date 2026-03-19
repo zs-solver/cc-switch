@@ -404,7 +404,7 @@ class CCSwitch:
                 else:
                     models = FALLBACK_MODELS
                 if base_url and api_key:
-                    test_list.append((entry["name"], base_url, api_key, models))
+                    test_list.append((entry["name"], base_url, api_key, models, cfg_path))
             except Exception:
                 continue
         dlg = TestAllDialog(test_list)
