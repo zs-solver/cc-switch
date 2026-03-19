@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QAction,
                              QDialogButtonBox, QLabel, QMessageBox)
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
 from PyQt5.QtCore import Qt
+from test_configs import TestAllDialog
 
 # 自动切换到脚本目录
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -325,6 +326,11 @@ class CCSwitch:
 
         menu.addSeparator()
 
+        # 测试所有配置
+        test_action = QAction("测试所有配置(&T)...", menu)
+        test_action.triggered.connect(self.on_test_all)
+        menu.addAction(test_action)
+
         # 新增配置
         add_action = QAction("新增配置(&A)...", menu)
         add_action.triggered.connect(self.on_add_config)
@@ -378,6 +384,31 @@ class CCSwitch:
         except Exception as e:
             self.tray.showMessage("CC Switch 错误", str(e),
                                   QSystemTrayIcon.Critical, 3000)
+
+    def on_test_all(self):
+        """弹出测试对话框"""
+        from test_configs import FALLBACK_MODELS
+        test_list = []
+        for entry in CONFIGS:
+            cfg_path = find_cfg_path(entry["filename"])
+            if not cfg_path:
+                continue
+            try:
+                cfg = read_json(cfg_path)
+                base_url = cfg.get("env", {}).get("ANTHROPIC_BASE_URL", "")
+                api_key = cfg.get("env", {}).get("ANTHROPIC_AUTH_TOKEN", "")
+                cfg_model = (cfg.get("model")
+                             or cfg.get("env", {}).get("ANTHROPIC_MODEL"))
+                if cfg_model and cfg_model not in FALLBACK_MODELS:
+                    models = [cfg_model]
+                else:
+                    models = FALLBACK_MODELS
+                if base_url and api_key:
+                    test_list.append((entry["name"], base_url, api_key, models))
+            except Exception:
+                continue
+        dlg = TestAllDialog(test_list)
+        dlg.exec_()
 
     def on_add_config(self):
         """弹出对话框新增配置"""
