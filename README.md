@@ -13,17 +13,28 @@ Windows 托盘工具，用于快速切换 Claude Code 的 API 配置。
 1. `./settings/` — 项目本地目录（含密钥，已 gitignore）
 2. `~/.claude/` — 家目录（回退）
 
-## 支持的配置
+## 自动发现
 
-| 菜单名称 | 设置文件 | Base URL |
-|----------|---------|----------|
-| One API (AI In One) | `settings-one-api.json` | https://ai-in.one |
-| Fucheers (New API) | `settings-fucheers.json` | https://www.fucheers.top |
-| GLM5 (阿里云) | `settings-glm5.json` | https://dashscope.aliyuncs.com |
-| TimeSniper (一元) | `settings-timesniper.json` | https://timesniper.club |
-| AI派 (AIPaiBox) | `settings-aipaibox.json` | https://api.aipaibox.com |
-| timicc | `settings-timicc.json` | https://timicc.com/ |
-| Kiro (本地代理) | `settings-kiro.json` | http://localhost:8000 |
+启动时自动扫描上述两个目录中的 `settings-*.json` 文件，未在 `config.json` 中登记的会自动补充并持久化，无需手动编辑 `config.json`。自动推导规则：
+
+- **name**：从文件名推导，如 `settings-foo-bar.json` → `foo-bar`
+- **website**：从文件内 `ANTHROPIC_BASE_URL` 提取域名
+- **base_url**：从文件内 `ANTHROPIC_BASE_URL` 读取
+
+只需将配置文件放入 `settings/` 目录，重启程序即可自动出现在菜单中。
+
+## 新增配置
+
+托盘菜单提供「新增配置」入口，点击后弹出对话框：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| Base URL | 是 | API 地址 |
+| API Key | 是 | 认证密钥 |
+| 名称 | 否 | 留空则从 Base URL 域名自动推导 |
+| Model | 否 | 留空则不指定 |
+
+确认后自动生成 `settings-*.json` 文件并写入 `config.json`，菜单即时刷新。
 
 ## 使用
 
