@@ -1,9 +1,13 @@
 import sys
 import os
 import json
+import glob
 import subprocess
 import webbrowser
-from PyQt5.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QAction)
+from urllib.parse import urlparse
+from PyQt5.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QAction,
+                             QDialog, QVBoxLayout, QFormLayout, QLineEdit,
+                             QDialogButtonBox, QLabel, QMessageBox)
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
 from PyQt5.QtCore import Qt
 
@@ -47,6 +51,62 @@ def find_cfg_path(filename):
     if os.path.exists(home_path):
         return home_path
     return None
+
+
+def extract_website(base_url):
+    """从 base_url 提取 scheme://host 作为 website"""
+    parsed = urlparse(base_url)
+    if parsed.scheme and parsed.hostname:
+        port = f":{parsed.port}" if parsed.port and parsed.port not in (80, 443) else ""
+        return f"{parsed.scheme}://{parsed.hostname}{port}"
+    return base_url
+
+
+def derive_name(filename):
+    """从文件名推导显示名称: settings-foo-bar.json -> foo-bar"""
+    name = filename
+    if name.startswith("settings-"):
+        name = name[len("settings-"):]
+    if name.endswith(".json"):
+        name = name[:-len(".json")]
+    return name or filename
+
+
+def auto_discover_configs():
+    """扫描 settings/ 和 ~/.claude/ 下的 settings-*.json，自动补充未登记的条目并回写 config.json"""
+    known_filenames = {entry["filename"] for entry in CONFIGS}
+    discovered = []
+
+    # 扫描两个目录
+    for scan_dir in [LOCAL_SETTINGS_DIR, SETTINGS_DIR]:
+        if not os.path.isdir(scan_dir):
+            continue
+        for filepath in glob.glob(os.path.join(scan_dir, "settings-*.json")):
+            filename = os.path.basename(filepath)
+            if filename in known_filenames:
+                continue
+            # 避免两个目录重复发现同名文件
+            known_filenames.add(filename)
+            try:
+                cfg = read_json(filepath)
+                base_url = cfg.get("env", {}).get("ANTHROPIC_BASE_URL", "")
+                entry = {
+                    "name": derive_name(filename),
+                    "filename": filename,
+                    "website": extract_website(base_url) if base_url else "",
+                    "base_url": base_url,
+                }
+                discovered.append(entry)
+            except Exception:
+                continue
+
+    if discovered:
+        CONFIGS.extend(discovered)
+        # 回写 config.json 持久化
+        APP_CONFIG["configs"] = CONFIGS
+        write_json(CONFIG_FILE, APP_CONFIG)
+
+    return discovered
 
 
 def detect_current(settings):
@@ -107,6 +167,77 @@ def create_icon(letter="C", bg_color="#6B4C9A", fg_color="#FFFFFF"):
     return QIcon(pixmap)
 
 
+class AddConfigDialog(QDialog):
+    """新增配置对话框"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("新增 API 配置")
+        self.setMinimumWidth(480)
+
+        layout = QVBoxLayout(self)
+
+        # 说明
+        tip = QLabel("Base URL 和 API Key 为必填项，其他字段可留空自动推导。")
+        tip.setWordWrap(True)
+        layout.addWidget(tip)
+
+        # 表单
+        form = QFormLayout()
+
+        self.base_url_input = QLineEdit()
+        self.base_url_input.setPlaceholderText("https://api.example.com")
+        form.addRow("Base URL *", self.base_url_input)
+
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setPlaceholderText("sk-...")
+        form.addRow("API Key *", self.api_key_input)
+
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("留空则从 Base URL 域名推导")
+        form.addRow("名称", self.name_input)
+
+        self.model_input = QLineEdit()
+        self.model_input.setPlaceholderText("留空则不指定，如 claude-sonnet-4-20250514")
+        form.addRow("Model", self.model_input)
+
+        layout.addLayout(form)
+
+        # 按钮
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.validate_and_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def validate_and_accept(self):
+        base_url = self.base_url_input.text().strip()
+        api_key = self.api_key_input.text().strip()
+        if not base_url:
+            QMessageBox.warning(self, "提示", "Base URL 不能为空")
+            return
+        if not api_key:
+            QMessageBox.warning(self, "提示", "API Key 不能为空")
+            return
+        self.accept()
+
+    def get_values(self):
+        base_url = self.base_url_input.text().strip()
+        api_key = self.api_key_input.text().strip()
+        name = self.name_input.text().strip()
+        model = self.model_input.text().strip()
+
+        # 自动推导 name
+        if not name:
+            parsed = urlparse(base_url)
+            name = parsed.hostname or base_url
+
+        return {
+            "base_url": base_url,
+            "api_key": api_key,
+            "name": name,
+            "model": model,
+        }
+
+
 class CCSwitch:
     def __init__(self):
         self.app = QApplication(sys.argv)
@@ -117,6 +248,7 @@ class CCSwitch:
         self.tray.activated.connect(self.on_activated)
 
         self.current_name = None
+        auto_discover_configs()
         self.build_menu()
         self.tray.show()
 
@@ -193,6 +325,13 @@ class CCSwitch:
 
         menu.addSeparator()
 
+        # 新增配置
+        add_action = QAction("新增配置(&A)...", menu)
+        add_action.triggered.connect(self.on_add_config)
+        menu.addAction(add_action)
+
+        menu.addSeparator()
+
         # 重启
         restart_action = QAction("重启程序(&R)", menu)
         restart_action.triggered.connect(self.restart)
@@ -239,6 +378,58 @@ class CCSwitch:
         except Exception as e:
             self.tray.showMessage("CC Switch 错误", str(e),
                                   QSystemTrayIcon.Critical, 3000)
+
+    def on_add_config(self):
+        """弹出对话框新增配置"""
+        dlg = AddConfigDialog()
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        values = dlg.get_values()
+
+        # 生成文件名 slug：取域名，替换特殊字符
+        parsed = urlparse(values["base_url"])
+        slug = (parsed.hostname or "custom").replace(".", "-")
+        filename = f"settings-{slug}.json"
+
+        # 避免文件名冲突，加数字后缀
+        existing_filenames = {entry["filename"] for entry in CONFIGS}
+        if filename in existing_filenames:
+            i = 2
+            while f"settings-{slug}-{i}.json" in existing_filenames:
+                i += 1
+            filename = f"settings-{slug}-{i}.json"
+
+        # 生成 settings 文件内容
+        settings_content = {
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": values["api_key"],
+                "ANTHROPIC_BASE_URL": values["base_url"],
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            }
+        }
+        if values["model"]:
+            settings_content["model"] = values["model"]
+
+        # 写入 settings/ 目录
+        os.makedirs(LOCAL_SETTINGS_DIR, exist_ok=True)
+        settings_path = os.path.join(LOCAL_SETTINGS_DIR, filename)
+        write_json(settings_path, settings_content)
+
+        # 追加到 config.json
+        new_entry = {
+            "name": values["name"],
+            "filename": filename,
+            "website": extract_website(values["base_url"]),
+            "base_url": values["base_url"],
+        }
+        CONFIGS.append(new_entry)
+        APP_CONFIG["configs"] = CONFIGS
+        write_json(CONFIG_FILE, APP_CONFIG)
+
+        # 刷新菜单
+        self.build_menu()
+        self.tray.showMessage("CC Switch", f"已新增配置: {values['name']}",
+                              QSystemTrayIcon.Information, 2000)
 
     def restart(self):
         """重启程序"""
