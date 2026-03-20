@@ -36,6 +36,18 @@ Windows 托盘工具，用于快速切换 Claude Code 的 API 配置。
 
 确认后自动生成 `settings-*.json` 文件并写入 `config.json`，菜单即时刷新。
 
+## 测试所有配置
+
+托盘菜单提供「测试所有配置」入口，对所有已注册的 API 配置进行批量可用性测试。
+
+每个配置同时执行两种测试：
+- **HTTP 测试** — 直接请求流式接口，测量首字耗时（TTFT）、回复字数、总耗时、速度
+- **CLI 测试** — 通过 `claude --settings <path> -p "Hi"` 验证端到端可用性
+
+测试结果以双行表格展示，每个配置占两行（HTTP + CLI），支持 hover 查看完整响应。也可以 `python test_configs.py` 在命令行运行。
+
+详细开发记录见 [devlog/配置可用性测试功能.md](devlog/配置可用性测试功能.md)。
+
 ## 使用
 
 双击 `start.bat` 后台启动，或：
