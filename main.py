@@ -1,242 +1,20 @@
 import sys
 import os
 import json
-import glob
 import subprocess
 import webbrowser
-from urllib.parse import urlparse
 from PyQt5.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QAction,
-                             QDialog, QVBoxLayout, QFormLayout, QLineEdit,
-                             QDialogButtonBox, QLabel, QMessageBox)
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
+                             QDialog)
 from PyQt5.QtCore import Qt
-from test_configs import TestAllDialog
+
+from core.config_manager import ConfigManager, read_json
+from ui.test_dialog import TestAllDialog
+from ui.dialogs import AddConfigDialog
+from ui.icons import create_tray_icon, create_check_icon
 
 # 自动切换到脚本目录
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(SCRIPT_DIR)
-
-CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
-
-
-def load_config():
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-APP_CONFIG = load_config()
-SETTINGS_DIR = os.path.expanduser(APP_CONFIG["settings_dir"])
-LOCAL_SETTINGS_DIR = os.path.join(SCRIPT_DIR, "settings")
-SETTINGS_FILE = os.path.join(SETTINGS_DIR, "settings.json")
-CONFIGS = APP_CONFIG["configs"]
-KNOWN_ENV_KEYS = set(APP_CONFIG["known_env_keys"])
-
-
-def read_json(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def write_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-
-
-def find_cfg_path(filename):
-    """查找配置文件路径，优先项目 settings/ 目录，其次家目录"""
-    local_path = os.path.join(LOCAL_SETTINGS_DIR, filename)
-    if os.path.exists(local_path):
-        return local_path
-    home_path = os.path.join(SETTINGS_DIR, filename)
-    if os.path.exists(home_path):
-        return home_path
-    return None
-
-
-def extract_website(base_url):
-    """从 base_url 提取 scheme://host 作为 website"""
-    parsed = urlparse(base_url)
-    if parsed.scheme and parsed.hostname:
-        port = f":{parsed.port}" if parsed.port and parsed.port not in (80, 443) else ""
-        return f"{parsed.scheme}://{parsed.hostname}{port}"
-    return base_url
-
-
-def derive_name(filename):
-    """从文件名推导显示名称: settings-foo-bar.json -> foo-bar"""
-    name = filename
-    if name.startswith("settings-"):
-        name = name[len("settings-"):]
-    if name.endswith(".json"):
-        name = name[:-len(".json")]
-    return name or filename
-
-
-def auto_discover_configs():
-    """扫描 settings/ 和 ~/.claude/ 下的 settings-*.json，自动补充未登记的条目并回写 config.json"""
-    known_filenames = {entry["filename"] for entry in CONFIGS}
-    discovered = []
-
-    # 扫描两个目录
-    for scan_dir in [LOCAL_SETTINGS_DIR, SETTINGS_DIR]:
-        if not os.path.isdir(scan_dir):
-            continue
-        for filepath in glob.glob(os.path.join(scan_dir, "settings-*.json")):
-            filename = os.path.basename(filepath)
-            if filename in known_filenames:
-                continue
-            # 避免两个目录重复发现同名文件
-            known_filenames.add(filename)
-            try:
-                cfg = read_json(filepath)
-                base_url = cfg.get("env", {}).get("ANTHROPIC_BASE_URL", "")
-                entry = {
-                    "name": derive_name(filename),
-                    "filename": filename,
-                    "website": extract_website(base_url) if base_url else "",
-                    "base_url": base_url,
-                }
-                discovered.append(entry)
-            except Exception:
-                continue
-
-    if discovered:
-        CONFIGS.extend(discovered)
-        # 回写 config.json 持久化
-        APP_CONFIG["configs"] = CONFIGS
-        write_json(CONFIG_FILE, APP_CONFIG)
-
-    return discovered
-
-
-def detect_current(settings):
-    """根据当前 settings.json 的 env 匹配到哪个配置"""
-    cur_url = settings.get("env", {}).get("ANTHROPIC_BASE_URL", "")
-    cur_token = settings.get("env", {}).get("ANTHROPIC_AUTH_TOKEN", "")
-    for entry in CONFIGS:
-        cfg_path = find_cfg_path(entry["filename"])
-        if not cfg_path:
-            continue
-        cfg = read_json(cfg_path)
-        cfg_url = cfg.get("env", {}).get("ANTHROPIC_BASE_URL", "")
-        cfg_token = cfg.get("env", {}).get("ANTHROPIC_AUTH_TOKEN", "")
-        if cur_url == cfg_url and cur_token == cfg_token:
-            return entry["name"]
-    return None
-
-
-def switch_config(target_filename):
-    """将目标配置文件的 env 和 model 覆盖到 settings.json，清除多余 env 变量"""
-    target_path = find_cfg_path(target_filename)
-    if not target_path:
-        raise FileNotFoundError(f"找不到配置文件: {target_filename}")
-    target = read_json(target_path)
-    current = read_json(SETTINGS_FILE)
-
-    # 用目标的 env 完全替换，但只保留已知的 env 键
-    new_env = {}
-    for k, v in target.get("env", {}).items():
-        if k in KNOWN_ENV_KEYS:
-            new_env[k] = v
-    current["env"] = new_env
-
-    # 覆盖 model（如果目标有 model 字段就覆盖，没有就删除）
-    if "model" in target:
-        current["model"] = target["model"]
-    elif "model" in current:
-        del current["model"]
-
-    write_json(SETTINGS_FILE, current)
-
-
-def create_icon(letter="C", bg_color="#6B4C9A", fg_color="#FFFFFF"):
-    """创建一个带字母的托盘图标"""
-    size = 64
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing)
-    painter.setBrush(QColor(bg_color))
-    painter.setPen(Qt.NoPen)
-    painter.drawRoundedRect(2, 2, size - 4, size - 4, 12, 12)
-    painter.setPen(QColor(fg_color))
-    font = QFont("Consolas", 36, QFont.Bold)
-    painter.setFont(font)
-    painter.drawText(0, 0, size, size, Qt.AlignCenter, letter)
-    painter.end()
-    return QIcon(pixmap)
-
-
-class AddConfigDialog(QDialog):
-    """新增配置对话框"""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("新增 API 配置")
-        self.setMinimumWidth(480)
-
-        layout = QVBoxLayout(self)
-
-        # 说明
-        tip = QLabel("Base URL 和 API Key 为必填项，其他字段可留空自动推导。")
-        tip.setWordWrap(True)
-        layout.addWidget(tip)
-
-        # 表单
-        form = QFormLayout()
-
-        self.base_url_input = QLineEdit()
-        self.base_url_input.setPlaceholderText("https://api.example.com")
-        form.addRow("Base URL *", self.base_url_input)
-
-        self.api_key_input = QLineEdit()
-        self.api_key_input.setPlaceholderText("sk-...")
-        form.addRow("API Key *", self.api_key_input)
-
-        self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("留空则从 Base URL 域名推导")
-        form.addRow("名称", self.name_input)
-
-        self.model_input = QLineEdit()
-        self.model_input.setPlaceholderText("留空则不指定，如 claude-sonnet-4-20250514")
-        form.addRow("Model", self.model_input)
-
-        layout.addLayout(form)
-
-        # 按钮
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.validate_and_accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def validate_and_accept(self):
-        base_url = self.base_url_input.text().strip()
-        api_key = self.api_key_input.text().strip()
-        if not base_url:
-            QMessageBox.warning(self, "提示", "Base URL 不能为空")
-            return
-        if not api_key:
-            QMessageBox.warning(self, "提示", "API Key 不能为空")
-            return
-        self.accept()
-
-    def get_values(self):
-        base_url = self.base_url_input.text().strip()
-        api_key = self.api_key_input.text().strip()
-        name = self.name_input.text().strip()
-        model = self.model_input.text().strip()
-
-        # 自动推导 name
-        if not name:
-            parsed = urlparse(base_url)
-            name = parsed.hostname or base_url
-
-        return {
-            "base_url": base_url,
-            "api_key": api_key,
-            "name": name,
-            "model": model,
-        }
 
 
 class CCSwitch:
@@ -244,47 +22,35 @@ class CCSwitch:
         self.app = QApplication(sys.argv)
         self.app.setQuitOnLastWindowClosed(False)
 
+        self.cm = ConfigManager()
+        self.cm.auto_discover()
+
         self.tray = QSystemTrayIcon()
-        self.tray.setIcon(create_icon("C"))
+        self.tray.setIcon(create_tray_icon("C"))
         self.tray.activated.connect(self.on_activated)
 
         self.current_name = None
-        auto_discover_configs()
         self.build_menu()
         self.tray.show()
 
-    def create_check_icon(self):
-        """创建一个圆点图标用于标记当前配置"""
-        size = 16
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setBrush(QColor("#000000"))
-        painter.setPen(Qt.NoPen)
-        painter.drawEllipse(4, 4, 8, 8)
-        painter.end()
-        return QIcon(pixmap)
-
     def build_menu(self):
         """构建/重建托盘菜单"""
-        settings = read_json(SETTINGS_FILE)
-        self.current_name = detect_current(settings)
+        self.current_name = self.cm.detect_current()
 
         menu = QMenu()
 
         # 配置切换区（子菜单）
-        for entry in CONFIGS:
+        for entry in self.cm.configs:
             name = entry["name"]
             filename = entry["filename"]
             website = entry.get("website", "")
-            cfg_path = find_cfg_path(filename)
+            cfg_path = self.cm.find_cfg_path(filename)
             if not cfg_path:
                 continue
 
             submenu = menu.addMenu(name)
             if name == self.current_name:
-                submenu.setIcon(self.create_check_icon())
+                submenu.setIcon(create_check_icon())
 
             # 切换到此配置
             switch_action = QAction("切换到此配置", submenu)
@@ -360,7 +126,6 @@ class CCSwitch:
         if reason == QSystemTrayIcon.Trigger:
             menu = self.tray.contextMenu()
             if menu:
-                # 在鼠标位置显示菜单
                 from PyQt5.QtGui import QCursor
                 menu.popup(QCursor.pos())
 
@@ -375,7 +140,7 @@ class CCSwitch:
         if name == self.current_name:
             return
         try:
-            switch_config(filename)
+            self.cm.switch(filename)
             self.current_name = name
             self.update_tooltip()
             self.build_menu()
@@ -387,27 +152,7 @@ class CCSwitch:
 
     def on_test_all(self):
         """弹出测试对话框"""
-        from test_configs import FALLBACK_MODELS
-        test_list = []
-        for entry in CONFIGS:
-            cfg_path = find_cfg_path(entry["filename"])
-            if not cfg_path:
-                continue
-            try:
-                cfg = read_json(cfg_path)
-                base_url = cfg.get("env", {}).get("ANTHROPIC_BASE_URL", "")
-                api_key = cfg.get("env", {}).get("ANTHROPIC_AUTH_TOKEN", "")
-                cfg_model = (cfg.get("model")
-                             or cfg.get("env", {}).get("ANTHROPIC_MODEL"))
-                if cfg_model and cfg_model not in FALLBACK_MODELS:
-                    models = [cfg_model]
-                else:
-                    models = FALLBACK_MODELS
-                if base_url and api_key:
-                    test_list.append((entry["name"], base_url, api_key, models, cfg_path))
-            except Exception:
-                continue
-        dlg = TestAllDialog(test_list)
+        dlg = TestAllDialog(self.cm)
         dlg.exec_()
 
     def on_add_config(self):
@@ -416,48 +161,7 @@ class CCSwitch:
         if dlg.exec_() != QDialog.Accepted:
             return
         values = dlg.get_values()
-
-        # 生成文件名 slug：取域名，替换特殊字符
-        parsed = urlparse(values["base_url"])
-        slug = (parsed.hostname or "custom").replace(".", "-")
-        filename = f"settings-{slug}.json"
-
-        # 避免文件名冲突，加数字后缀
-        existing_filenames = {entry["filename"] for entry in CONFIGS}
-        if filename in existing_filenames:
-            i = 2
-            while f"settings-{slug}-{i}.json" in existing_filenames:
-                i += 1
-            filename = f"settings-{slug}-{i}.json"
-
-        # 生成 settings 文件内容
-        settings_content = {
-            "env": {
-                "ANTHROPIC_AUTH_TOKEN": values["api_key"],
-                "ANTHROPIC_BASE_URL": values["base_url"],
-                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-            }
-        }
-        if values["model"]:
-            settings_content["model"] = values["model"]
-
-        # 写入 settings/ 目录
-        os.makedirs(LOCAL_SETTINGS_DIR, exist_ok=True)
-        settings_path = os.path.join(LOCAL_SETTINGS_DIR, filename)
-        write_json(settings_path, settings_content)
-
-        # 追加到 config.json
-        new_entry = {
-            "name": values["name"],
-            "filename": filename,
-            "website": extract_website(values["base_url"]),
-            "base_url": values["base_url"],
-        }
-        CONFIGS.append(new_entry)
-        APP_CONFIG["configs"] = CONFIGS
-        write_json(CONFIG_FILE, APP_CONFIG)
-
-        # 刷新菜单
+        self.cm.add(**values)
         self.build_menu()
         self.tray.showMessage("CC Switch", f"已新增配置: {values['name']}",
                               QSystemTrayIcon.Information, 2000)
