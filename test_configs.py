@@ -201,17 +201,20 @@ class _CLITestWorker(QThread):
 
 
 class TestAllDialog(QDialog):
-    """配置可用性测试对话框"""
-    COLUMNS = ["名称", "HTTP", "模型", "路径", "首字耗时", "回复字数",
-               "总耗时", "速度", "HTTP响应", "CLI", "CLI耗时", "CLI响应"]
+    """配置可用性测试对话框 — 每个配置占两行（HTTP + CLI）"""
+    COLUMNS = ["名称", "测试", "状态", "模型", "路径", "首字耗时",
+               "字数", "总耗时", "速度", "响应"]
+    COL = {name: i for i, name in enumerate(COLUMNS)}
 
     def __init__(self, test_configs, parent=None):
         super().__init__(parent)
         self.setWindowTitle("CC Switch - 配置可用性测试")
-        self.setMinimumSize(1100, 420)
         self.workers = []
         self.cli_workers = []
         self._test_configs = test_configs
+
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.resize(int(screen.width() * 0.82), int(screen.height() * 0.55))
 
         layout = QVBoxLayout(self)
 
@@ -221,6 +224,7 @@ class TestAllDialog(QDialog):
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.verticalHeader().setVisible(False)
         layout.addWidget(self.table)
 
         btn_layout = QHBoxLayout()
@@ -235,6 +239,10 @@ class TestAllDialog(QDialog):
 
         self.start_tests()
 
+    def _row_for(self, cfg_index, is_cli=False):
+        """配置索引 → 表格行号。每个配置占 2 行：偶数=HTTP，奇数=CLI"""
+        return cfg_index * 2 + (1 if is_cli else 0)
+
     def start_tests(self):
         for w in self.workers + self.cli_workers:
             if w.isRunning():
@@ -243,57 +251,89 @@ class TestAllDialog(QDialog):
         self.cli_workers.clear()
         self.retest_btn.setEnabled(False)
         self._done_count = 0
-        self._total = len(self._test_configs) * 2  # HTTP + CLI
+        self._total = len(self._test_configs) * 2
 
-        self.table.setRowCount(len(self._test_configs))
+        n = len(self._test_configs)
+        self.table.setRowCount(n * 2)
+        C = self.COL
+
         for i, cfg in enumerate(self._test_configs):
-            name = cfg[0]
-            self.table.setItem(i, 0, QTableWidgetItem(name))
-            self.table.setItem(i, 1, QTableWidgetItem("⏳"))
-            for col in range(2, 9):
-                self.table.setItem(i, col, QTableWidgetItem(""))
-            self.table.setItem(i, 9, QTableWidgetItem("⏳"))
-            for col in range(10, len(self.COLUMNS)):
-                self.table.setItem(i, col, QTableWidgetItem(""))
-
-            # HTTP worker
             name, base_url, api_key, models, settings_path = cfg
+            r_http = self._row_for(i, False)
+            r_cli = self._row_for(i, True)
+
+            for col in range(len(self.COLUMNS)):
+                self.table.setItem(r_http, col, QTableWidgetItem(""))
+                self.table.setItem(r_cli, col, QTableWidgetItem(""))
+
+            self.table.setItem(r_http, C["名称"], QTableWidgetItem(name))
+            self.table.setSpan(r_http, C["名称"], 2, 1)
+            self.table.setItem(r_http, C["测试"], QTableWidgetItem("HTTP"))
+            self.table.setItem(r_http, C["状态"], QTableWidgetItem("⏳"))
+            self.table.setItem(r_cli, C["测试"], QTableWidgetItem("CLI"))
+            self.table.setItem(r_cli, C["状态"], QTableWidgetItem("⏳"))
+
             worker = _TestWorker(i, name, base_url, api_key, models)
             worker.finished.connect(self._on_http_done)
             self.workers.append(worker)
 
-            # CLI worker
             cli_worker = _CLITestWorker(i, name, settings_path)
             cli_worker.finished.connect(self._on_cli_done)
             self.cli_workers.append(cli_worker)
+
+        self._apply_column_widths()
 
         for w in self.workers:
             w.start()
         for w in self.cli_workers:
             w.start()
 
-    def _on_http_done(self, row, result):
-        self.table.item(row, 1).setText(result["status"])
-        self.table.item(row, 2).setText(result.get("model", "-"))
-        self.table.item(row, 3).setText(result.get("path", "-"))
-        self.table.item(row, 4).setText(result["ttft"])
-        self.table.item(row, 5).setText(result["length"])
-        self.table.item(row, 6).setText(result["total"])
-        self.table.item(row, 7).setText(result["speed"])
+    def _on_http_done(self, cfg_index, result):
+        row = self._row_for(cfg_index, False)
+        C = self.COL
+        self.table.item(row, C["状态"]).setText(result["status"])
+        self.table.item(row, C["模型"]).setText(result.get("model", "-"))
+        self.table.item(row, C["路径"]).setText(result.get("path", "-"))
+        self.table.item(row, C["首字耗时"]).setText(result["ttft"])
+        self.table.item(row, C["字数"]).setText(result["length"])
+        self.table.item(row, C["总耗时"]).setText(result["total"])
+        self.table.item(row, C["速度"]).setText(result["speed"])
         resp = result["response"]
-        display = resp[:50] + "..." if len(resp) > 50 else resp
-        self.table.item(row, 8).setText(display)
-        self.table.item(row, 8).setToolTip(resp)
+        display = resp[:60] + "..." if len(resp) > 60 else resp
+        self.table.item(row, C["响应"]).setText(display)
+        self.table.item(row, C["响应"]).setToolTip(resp)
+        self._fit_columns()
         self._check_done()
 
-    def _on_cli_done(self, row, result):
-        self.table.item(row, 9).setText(result["cli_status"])
-        self.table.item(row, 10).setText(result["cli_total"])
+    def _on_cli_done(self, cfg_index, result):
+        row = self._row_for(cfg_index, True)
+        C = self.COL
+        self.table.item(row, C["状态"]).setText(result["cli_status"])
+        self.table.item(row, C["总耗时"]).setText(result["cli_total"])
         resp = result["cli_response"]
-        display = resp[:50] + "..." if len(resp) > 50 else resp
-        self.table.item(row, 11).setText(display)
-        self.table.item(row, 11).setToolTip(resp)
+        display = resp[:60] + "..." if len(resp) > 60 else resp
+        self.table.item(row, C["响应"]).setText(display)
+        self.table.item(row, C["响应"]).setToolTip(resp)
+        self._fit_columns()
         self._check_done()
+
+    def _apply_column_widths(self):
+        from PyQt5.QtWidgets import QHeaderView
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(self.COL["响应"], QHeaderView.Stretch)
+        self._fit_columns()
+
+    def _fit_columns(self):
+        """让每列宽度 = max(表头宽度, 内容宽度)"""
+        header = self.table.horizontalHeader()
+        fm = header.fontMetrics()
+        for col in range(len(self.COLUMNS)):
+            if col == self.COL["响应"]:
+                continue
+            header_w = fm.horizontalAdvance(self.COLUMNS[col]) + 24
+            self.table.resizeColumnToContents(col)
+            if self.table.columnWidth(col) < header_w:
+                self.table.setColumnWidth(col, header_w)
 
     def _check_done(self):
         self._done_count += 1
